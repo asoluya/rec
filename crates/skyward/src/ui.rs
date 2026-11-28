@@ -2457,7 +2457,10 @@ impl Pages<'_> {
                     }
                 }
                 self.attempt_was_remembered = false;
-                self.last_credential = None;
+                // The credential stays with the session rather than being
+                // dropped here: the switch may be turned on only after the
+                // files are open, and what opened them can still be kept
+                // then (see Effect::Remember).
             }
             decrypt::Ended::Unlocked(Err(why)) => {
                 skyward_sys::kmsg(&format!("what was entered did not open the user's files: {why}"))?;
@@ -2703,6 +2706,21 @@ impl Pages<'_> {
                 } else {
                     let _ = crate::remember::opt_in();
                     skyward_sys::kmsg("the screen lock is kept once it opens the user's files")?;
+                    // The files may already be open, unlocked before the
+                    // switch was turned on: no unlock is left to come and
+                    // keep the lock then, so keep it now.
+                    if self.closed.is_empty()
+                        && self.remembered.is_none()
+                        && let Some(credential) = self.last_credential.clone()
+                    {
+                        match crate::remember::write(&credential) {
+                            Ok(()) => {
+                                self.remembered = Some(credential);
+                                skyward_sys::kmsg("the screen lock is kept for the starts that follow")?;
+                            }
+                            Err(e) => skyward_sys::kmsg(&format!("the screen lock was not kept: {e:#}"))?,
+                        }
+                    }
                 }
             }
             Effect::ReadDir(folder) => list(&mut self.app, folder)?,
