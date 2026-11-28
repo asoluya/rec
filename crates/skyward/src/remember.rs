@@ -37,15 +37,25 @@ pub fn read() -> Option<Vec<u8>> {
 }
 
 /// Do `work` with the partition writable, and read-only again afterwards.
+///
+/// The partition is not mounted at all for much of the recovery's life --
+/// it is mounted for the moment it takes to read the settings and taken
+/// away again -- so where it is not mounted it is mounted here first, as
+/// `read` mounts it, and taken away again after. Without that, the work
+/// wrote to the empty folder the partition is mounted on, reported
+/// success, and what was kept was gone at the next start.
 fn writable<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
     let at = Path::new(METADATA);
     let mounted = skyward_block::mount::is_mount_point(at)?;
-    if mounted {
-        skyward_block::mount::remount_writable(at, true).context("make /metadata writable")?;
+    if !mounted {
+        skyward_block::mount::mount_ro(&Path::new(skyward_block::BY_NAME).join("metadata"), at)
+            .context("mount /metadata")?;
     }
+    skyward_block::mount::remount_writable(at, true).context("make /metadata writable")?;
     let done = work();
-    if mounted {
-        let _ = skyward_block::mount::remount_writable(at, false);
+    let _ = skyward_block::mount::remount_writable(at, false);
+    if !mounted {
+        let _ = skyward_block::mount::umount(at);
     }
     done
 }
@@ -79,16 +89,20 @@ pub const OPTED_OUT: &str = "/metadata/skyward/no-remember";
 
 /// Leave the mark that the switch was turned off.
 pub fn opt_out() -> std::io::Result<()> {
-    let _ = skyward_block::mount::remount_writable(std::path::Path::new("/metadata"), true);
-    let written = std::fs::write(OPTED_OUT, b"");
-    let _ = skyward_block::mount::remount_writable(std::path::Path::new("/metadata"), false);
-    written
+    writable(|| {
+        std::fs::write(OPTED_OUT, b"")?;
+        Ok(())
+    })
+    .map_err(std::io::Error::other)
 }
 
 /// Take the mark away: the switch was turned on.
 pub fn opt_in() -> std::io::Result<()> {
-    let _ = skyward_block::mount::remount_writable(std::path::Path::new("/metadata"), true);
-    let taken = std::fs::remove_file(OPTED_OUT).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) });
-    let _ = skyward_block::mount::remount_writable(std::path::Path::new("/metadata"), false);
-    taken
+    writable(|| {
+        std::fs::remove_file(OPTED_OUT).or_else(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }
+        })?;
+        Ok(())
+    })
+    .map_err(std::io::Error::other)
 }
