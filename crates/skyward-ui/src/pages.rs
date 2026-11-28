@@ -141,6 +141,7 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::SwitchSystem => (confirm::SWITCH_AND_REBOOT, false),
         Confirm::RemoveSystem => (confirm::REMOVE, true),
         Confirm::InstallSystem => (confirm::INSTALL, false),
+        Confirm::KeepLock => (confirm::TURN_ON, true),
     };
     (s.lang.pick(label), danger)
 }
@@ -632,6 +633,9 @@ pub fn decrypt(cx: &Ctx) -> Frame {
     let (c, l) = (page(cx), cx.state.lang);
     match &cx.state.data {
         Data::Locked { user, keys, checking } => code(cx, c, *user, *keys, *checking),
+        // Without a lock kept, the page the start opens on is the one to type
+        // it into: the keyboard takes nothing until the lock is known.
+        Data::Closed | Data::Opening if !cx.state.remember => code(cx, c, 0, Keys::Digits, true),
         Data::Closed | Data::Opening => data_status(
             cx,
             c,
@@ -670,6 +674,19 @@ fn data_status(cx: &Ctx, mut c: Canvas, icon: Icon, title: &str, note: Option<&s
         widgets::paragraph(&mut c, t, f, sign_cy + m.dp(88.0) + more, why);
         let again = widgets::button(&mut c, t, f, m.h as f32 * 0.62, l.pick(texts::common::TRY_AGAIN));
         out.push(Hit { rect: again, action: Action::OpenData });
+    }
+    if matches!(cx.state.data, Data::Open) {
+        // The lock is shown here too, and dropped from here: once it is
+        // kept the decrypt page opens straight into the menu, so this is
+        // where it is come back to in order to stop keeping it.
+        let row = widgets::list(&mut c, t, f, sign_cy + m.dp(150.0), &[Row::new(l.among("记住密码", "記住密碼", "Remember the screen lock")).trail(Trail::Switch(cx.state.remember))]);
+        out.extend(hits(&row.rows, &[Action::Toggle(Switch::Remember)]));
+        if cx.state.asking_remember {
+            let y = widgets::footnote(&mut c, t, f, row.bottom, l.among("开启后，锁屏密码会保存在本机，每次开机自动解密 data 分区。任何拿到这台手机的人都能借此读取其中全部文件，丢失、被盗或送修时尤其危险。开启即表示你接受这一风险。", "開啟後，螢幕鎖定密碼會保存在本機，每次開機自動解密 data 分割區。任何拿到這台手機的人都能藉此讀取其中全部檔案，遺失、被盜或送修時尤其危險。開啟即表示你接受這項風險。", "Kept, the screen lock is saved on this phone and opens the data partition by itself every start. Anyone who gets hold of the phone can read every file on it with it — worst of all if it is lost, stolen or sent for repair. Turning it on means you accept that."));
+            let (label, danger) = confirm_label(Confirm::KeepLock, cx.state);
+            let track = widgets::confirm(&mut c, t, f, y + m.dp(24.0), label, danger, cx.state.confirm);
+            out.push(Hit { rect: track, action: Action::Confirm(Confirm::KeepLock) });
+        }
     }
     let leave_cy = m.h as f32 - m.dp(64.0);
     let leave = l.pick(if matches!(cx.state.data, Data::Open | Data::Erased) { texts::common::DONE } else { texts::decrypt::NOT_NOW });
@@ -732,6 +749,23 @@ fn code(cx: &Ctx, mut c: Canvas, user: u32, keys: Keys, checking: bool) -> Frame
     let skip_cy = bottom - m.dp(34.0);
     c.text_center(&f.heading, l.pick(texts::decrypt::NOT_NOW), x, skip_cy, m.row_title_px, t.pal.accent);
     out.push(Hit { rect: Rect::new(x - m.dp(80.0), skip_cy - m.dp(24.0), m.dp(160.0), m.dp(48.0)), action: Action::Skip });
+    // Once something has been typed, it can be kept for the starts that
+    // follow: the switch says whether it is, and turning it on first puts
+    // the risk of keeping it under it, with the slider that agrees.
+    if !s.code.is_empty() && !checking {
+        let row_y = match keys {
+            Keys::Pattern => m.dp(636.0),
+            _ => m.dp(258.0),
+        };
+        let row = widgets::list(&mut c, t, f, row_y, &[Row::new(l.among("记住密码", "記住密碼", "Remember the screen lock")).trail(Trail::Switch(s.remember))]);
+        out.extend(hits(&row.rows, &[Action::Toggle(Switch::Remember)]));
+        if s.asking_remember {
+            let y = widgets::footnote(&mut c, t, f, row.bottom, l.among("开启后，锁屏密码会保存在本机，每次开机自动解密 data 分区。任何拿到这台手机的人都能借此读取其中全部文件，丢失、被盗或送修时尤其危险。开启即表示你接受这一风险。", "開啟後，螢幕鎖定密碼會保存在本機，每次開機自動解密 data 分割區。任何拿到這台手機的人都能藉此讀取其中全部檔案，遺失、被盜或送修時尤其危險。開啟即表示你接受這項風險。", "Kept, the screen lock is saved on this phone and opens the data partition by itself every start. Anyone who gets hold of the phone can read every file on it with it — worst of all if it is lost, stolen or sent for repair. Turning it on means you accept that."));
+            let (label, danger) = confirm_label(Confirm::KeepLock, s);
+            let track = widgets::confirm(&mut c, t, f, y + m.dp(24.0), label, danger, s.confirm);
+            out.push(Hit { rect: track, action: Action::Confirm(Confirm::KeepLock) });
+        }
+    }
     Frame { header: false, pattern, ..Frame::new(t, c, out, l.pick(texts::page::DECRYPT), 0.0) }
 }
 

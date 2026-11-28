@@ -567,6 +567,7 @@ merge = "Przesuń, aby scalić"
 fix = "Przesuń, aby naprawić"
 switch_and_reboot = "Przesuń: przełącz i zrestartuj"
 remove = "Przesuń, aby usunąć"
+turn_on = "Przesuń, aby włączyć"
 
 [page]
 home = "Ekran główny"

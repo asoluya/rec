@@ -116,6 +116,12 @@ pub struct State {
     /// Where the data partition stands, and what is typed at the screen
     /// lock its users' own files wait on.
     pub data: Data,
+    /// The screen lock is about to be kept, and the risk of keeping it is
+    /// shown before it is.
+    pub asking_remember: bool,
+    /// Whether the screen lock that opened the user's files is kept for the
+    /// starts that follow, so the decrypt page needs nothing typed.
+    pub remember: bool,
     pub code: String,
     /// What is typed in the search field.
     pub search: String,
@@ -250,6 +256,8 @@ impl Default for State {
             systems_work: None,
             system_notice: None,
             data: Data::Closed,
+            asking_remember: false,
+            remember: false,
             code: String::new(),
             search: String::new(),
             layer: Layer::Letters,

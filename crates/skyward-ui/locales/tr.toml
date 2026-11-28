@@ -557,6 +557,7 @@ merge = "Birleştirmek için kaydırın"
 fix = "Düzeltmek için kaydırın"
 switch_and_reboot = "Geçip yeniden başlatmak için kaydırın"
 remove = "Kaldırmak için kaydırın"
+turn_on = "Açmak için kaydırın"
 
 [page]
 home = "Ana sayfa"

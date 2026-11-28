@@ -8,6 +8,7 @@ use skyward_crypto::data::{self, Closed, Opening};
 use skyward_crypto::keymint::KeyMint;
 use skyward_sys::worker::Worker;
 use std::os::fd::RawFd;
+use std::path::Path;
 
 pub enum Job {
     /// Open the partition as far as it opens with nothing a user knows.
@@ -34,7 +35,9 @@ impl Decryptor {
     pub fn start(job: Job) -> Result<Decryptor> {
         let worker = Worker::start("decrypt", move |tell| {
             tell.tell(match job {
-                Job::Open => Ended::Opened(with_data_keys(data::open_without_credential)),
+                // 密钥程序在屏幕后面才起来：抢在前面看一眼会得到「not running」，
+                // 于是说打不开；等它一会儿再看（2026-11-26，取自 Kinaxie 的同名修复）。
+                Job::Open => Ended::Opened(again_while_starting(|| with_data_keys(data::open_without_credential))),
                 Job::Unlock { closed, user, credential } => {
                     Ended::Unlocked(with_key_service(|service| data::unlock(service, &closed, user, &credential)))
                 }
@@ -54,6 +57,43 @@ impl Decryptor {
     }
 }
 
+/// What the phone holds where the key service is reached, said beside why
+/// it was not: which programs of the service directories run, and where
+/// their own programs are.
+fn key_diagnostics() -> String {
+    let running = |name: &str| {
+        std::fs::read_dir("/proc").ok().into_iter().flatten().flatten().any(|entry| {
+            entry.file_name().to_string_lossy().bytes().all(|byte| byte.is_ascii_digit())
+                && std::fs::read(entry.path().join("cmdline")).is_ok_and(|bytes| String::from_utf8_lossy(&bytes).contains(name))
+        })
+    };
+    let at = |path: &str| if Path::new(path).is_file() { "there" } else { "missing" };
+    format!(
+        "\n[binder={} servicemanager={} hwservicemanager={} keymint={} servicemanager_bin={} keymint_bin={}]",
+        if Path::new("/dev/binder").exists() { "there" } else { "missing" },
+        if running("servicemanager") { "running" } else { "not running" },
+        if running("hwservicemanager") { "running" } else { "not running" },
+        if running("keymint") { "running" } else { "not running" },
+        at("/mnt/system/bin/servicemanager"),
+        at("/vendor/bin/hw/android.hardware.security.keymint-service-qti"),
+    )
+}
+
+/// 密钥服务正在起来时再看一次：最多等 20 次、每次 2 秒（40 秒），只为
+/// 「is not running」这一种还来得及的错误；别的原因照原样报上去。
+fn again_while_starting<T>(work: impl Fn() -> Result<T, String>) -> Result<T, String> {
+    let mut waited = 0;
+    loop {
+        match work() {
+            Err(why) if why.contains("is not running") && waited < 20 => {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                waited += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Do `work` with the phone's key service, reached afresh for it, and say
 /// why it failed in words for the page.
 pub fn with_key_service<T>(work: impl FnOnce(&KeyMint) -> Result<T>) -> Result<T, String> {
@@ -62,7 +102,7 @@ pub fn with_key_service<T>(work: impl FnOnce(&KeyMint) -> Result<T>) -> Result<T
         let service = KeyMint::open(&binder)?;
         work(&service)
     })();
-    done.map_err(|e| format!("{e:#}"))
+    done.map_err(|e| format!("{e:#}{}", key_diagnostics()))
 }
 
 /// Do `work` with what reaching the data partition takes: the phone's key
@@ -79,5 +119,5 @@ pub fn with_data_keys<T>(work: impl FnOnce(Option<&KeyMint>) -> Result<T>) -> Re
         let service = KeyMint::open(&binder)?;
         work(Some(&service))
     })();
-    done.map_err(|e| format!("{e:#}"))
+    done.map_err(|e| format!("{e:#}{}", key_diagnostics()))
 }

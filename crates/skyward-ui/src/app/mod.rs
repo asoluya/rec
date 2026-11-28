@@ -233,6 +233,9 @@ pub enum Confirm {
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
     InstallSystem,
+    /// Keep the screen lock for the starts that follow, the risk of
+    /// keeping it having been shown.
+    KeepLock,
 }
 
 /// What a control does when touched.
@@ -494,6 +497,9 @@ pub enum Effect {
     /// lock, telling what still waits with [`App::data_waiting`] or why it
     /// did not open with [`App::unlock_failed`].
     Unlock { user: u32, code: String },
+    /// Keep the screen lock that opened the user's files for the starts
+    /// that follow, or forget the one kept before.
+    Remember(bool),
     /// Hand the USB port back from fastboot to adb, bring up what the
     /// recovery runs from the slot's partitions, then show its pages with
     /// [`App::enter_recovery`].

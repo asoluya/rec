@@ -61,6 +61,25 @@ impl App {
                 self.state.follow_system_zone.toggle();
                 self.refresh();
             }
+            // Keeping the screen lock is a risk taken on, and it is said
+            // every time it is turned on, not once: the switch stays off
+            // until the slider is taken across. A second tap while the
+            // risk is shown puts it away again.
+            Action::Toggle(Switch::Remember) => {
+                if self.state.asking_remember {
+                    self.state.asking_remember = false;
+                    self.refresh();
+                    return Vec::new();
+                }
+                if !self.state.remember {
+                    self.state.asking_remember = true;
+                    self.refresh();
+                    return Vec::new();
+                }
+                self.state.remember = false;
+                self.refresh();
+                return vec![Effect::Remember(false)];
+            }
             Action::Toggle(switch) => {
                 let on = match switch {
                     Switch::Vibrate => &mut self.state.vibrate,
@@ -70,7 +89,7 @@ impl App {
                     Switch::Signature => &mut self.state.check_signature,
                     Switch::KeepRecovery => &mut self.state.keep_recovery,
                     Switch::ShowPassword => &mut self.state.show_password,
-                    Switch::Wlan | Switch::SystemTimeZone => unreachable!("the switch is turned above"),
+                    Switch::Wlan | Switch::SystemTimeZone | Switch::Remember => unreachable!("the switch is turned above"),
                 };
                 *on = !*on;
                 let now_on = *on;
@@ -710,6 +729,14 @@ impl App {
     pub(super) fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
+            // The slider taken across: the lock is kept from now on. The risk
+            // is asked again the next time it is turned on.
+            Confirm::KeepLock => {
+                self.state.asking_remember = false;
+                self.state.remember = true;
+                self.refresh();
+                fx.push(Effect::Remember(true));
+            }
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();

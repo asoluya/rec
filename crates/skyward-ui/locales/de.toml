@@ -557,6 +557,7 @@ merge = "Zum Mergen schieben"
 fix = "Zum Reparieren schieben"
 switch_and_reboot = "Zum Wechseln und Neustarten schieben"
 remove = "Zum Entfernen schieben"
+turn_on = "Zum Einschalten schieben"
 
 [page]
 home = "Startseite"

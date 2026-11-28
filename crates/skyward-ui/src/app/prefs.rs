@@ -33,6 +33,9 @@ pub enum Switch {
     ShowPassword,
     /// Keep the time zone the installed system is set to.
     SystemTimeZone,
+    /// Keep the screen lock that opens the user's files for the starts
+    /// that follow, so it need not be typed at each start.
+    Remember,
 }
 
 /// How long the screen stays on with nothing touched, in milliseconds, in

@@ -636,6 +636,7 @@ merge = "Slide to merge"
 fix = "Slide to fix"
 switch_and_reboot = "Slide to switch and reboot"
 remove = "Slide to remove"
+turn_on = "Slide to turn on"
 
 # What pages are called, both on the rows that open them and in their own
 # titles.

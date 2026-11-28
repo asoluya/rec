@@ -562,6 +562,7 @@ merge = "Glisser pour fusionner"
 fix = "Glisser pour corriger"
 switch_and_reboot = "Glisser pour basculer et redémarrer"
 remove = "Glisser pour supprimer"
+turn_on = "Glisser pour activer"
 
 [page]
 home = "Accueil"

@@ -552,6 +552,7 @@ merge = "Geser untuk gabungkan"
 fix = "Geser untuk perbaiki"
 switch_and_reboot = "Geser untuk beralih dan mulai ulang"
 remove = "Geser untuk hapus"
+turn_on = "Geser untuk mengaktifkan"
 
 [page]
 home = "Beranda"

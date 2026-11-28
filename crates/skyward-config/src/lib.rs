@@ -41,6 +41,32 @@ pub mod ramdisk {
     }
 }
 
+/// Programs the phone's partitions name for its keys that a recovery of this
+/// phone cannot run: they are left out of the steps the partitions give.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Keys {
+    /// Interfaces whose programs are left out, each a prefix: a phone whose
+    /// secure element service ends as it starts in a recovery names
+    /// `android.hardware.secure_element.` here, and one whose weaver reaches
+    /// its secure element through a running Android names
+    /// `android.hardware.weaver.`. Left out, every program the partitions name
+    /// is started as they say.
+    #[serde(default)]
+    pub leave_out: Vec<String>,
+}
+
+/// How the data partition is opened: the weaver keeps every user's secret in a
+/// slot of the secure element, and where its service answers a recovery can use
+/// those slots as the phone does. Where it does not, the blob the credential
+/// service guards is taken instead.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Data {
+    /// Whether the weaver's own slots are used. Left out, the other blob is
+    /// taken, which is what a phone whose weaver cannot be reached needs.
+    #[serde(default)]
+    pub weaver_first: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeviceConfig {
     pub device: Device,
@@ -70,6 +96,12 @@ pub struct DeviceConfig {
     /// boot actions.
     #[serde(default)]
     pub owners: Vec<Owners>,
+    /// How the data partition is opened, where the phone's configuration says.
+    #[serde(default)]
+    pub data: Option<Data>,
+    /// Which of the programs the partitions name for the keys are left out.
+    #[serde(default)]
+    pub keys: Keys,
     #[serde(default)]
     pub wipe: Wipe,
     #[serde(default)]
@@ -398,6 +430,13 @@ pub struct Service {
     /// names it: it keeps these alone, through its change of user.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// The program is passed over where it is not in the partition, and
+    /// where it does not become what it says it will be, so that a phone
+    /// whose vendor keeps either of two builds of a service still starts
+    /// the one it has and the rest after it (2026-11-25, from
+    /// Kinaxie/skyward).
+    #[serde(default)]
+    pub optional: bool,
 }
 
 /// The kernel's capabilities, by the names init's capabilities lines give
@@ -803,7 +842,7 @@ mod tests {
             (include_str!("../../../devices/pudding.toml"), "OS4.0.4.0.XPCCNXM"),
             (include_str!("../../../devices/pandora.toml"), "OS4.0.4.0.XBLCNXM"),
             (include_str!("../../../devices/popsicle.toml"), "OS4.0.4.0.XPBCNXM"),
-            (include_str!("../../../devices/myron.toml"), "OS4.0.8.0.XPMCNXM"),
+            (include_str!("../../../devices/myron.toml"), "OS4.0.4.0.XPMCNXM"),
             (include_str!("../../../devices/songyuan.toml"), "OS4.0.4.0.XGNCNXM"),
             (include_str!("../../../devices/athens.toml"), "OS4.0.4.0.XPICNXM"),
             (include_str!("../../../devices/fuxi.toml"), "OS3.0.309.0.WMCCNXM"),

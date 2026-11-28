@@ -557,6 +557,7 @@ merge = "Trượt để hợp nhất"
 fix = "Trượt để sửa"
 switch_and_reboot = "Trượt để chuyển và khởi động lại"
 remove = "Trượt để gỡ"
+turn_on = "Trượt để bật"
 
 [page]
 home = "Trang chủ"

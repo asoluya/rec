@@ -224,7 +224,19 @@ fn image(file: &Path) -> Result<(u64, u64)> {
 /// description of one program or in the one a whole partition shares, and
 /// the directory reads the whole of its description directory at once, so
 /// that one file it cannot make sense of leaves it describing nothing.
-pub fn publish_descriptions(wanted: &[String]) -> Result<()> {
+/// What the directory was told to read again: the process that answered
+/// before, and what had registered with it, each with the init service behind
+/// it, to be started again once it answers anew.
+pub struct Restarting {
+    was: Option<u32>,
+    registered: Vec<(String, String)>,
+}
+
+/// Write what the recovery's own programs register, and have the directory
+/// start again where it has to read these anew -- without waiting for it:
+/// what the page waits for (the drivers, the phone's files) goes on at the
+/// same time, and the directory is waited for by [`await_descriptions`].
+pub fn write_descriptions(wanted: &[String]) -> Result<Option<Restarting>> {
     let into = Path::new(RECOVERY_DESCRIPTIONS);
     fs::create_dir_all(into).with_context(|| format!("make {}", into.display()))?;
     // Both directories read these as the users their init scripts name,
@@ -264,18 +276,64 @@ pub fn publish_descriptions(wanted: &[String]) -> Result<()> {
             break;
         }
     }
-    if unknown || rewritten > 0 {
-        // It comes back knowing nothing of what had registered with it,
-        // and nothing registers again by itself, so init starts each of
-        // those services again, as the installed system's init does
-        // whenever its directory restarts.
+    if rewritten > 0 || unknown {
+        skyward_sys::kmsg("the description is written; the directory has to start again")?;
+        // It comes back knowing nothing of what had registered with it, and
+        // nothing registers again by itself, so init starts each of those
+        // services again once it answers, which `await_descriptions` does.
         let registered = registered()?;
         let was = crate::services::running(DIRECTORY_PROGRAM);
-        skyward_sys::set_prop("ctl.restart", DIRECTORY_SERVICE).context("have the service directory start again")?;
-        answering_again(was)?;
-        register_again(&registered)?;
+        // Stopped and started by hand rather than through `ctl.restart`: the
+        // directory's own service is `disabled`, and init's restart of a
+        // disabled service does not come back at once -- it was 3.67 s between
+        // the kill and the new process, all of it waited for here
+        // (2026-11-15). `ctl.start` starts a disabled service as asked.
+        skyward_sys::set_prop("ctl.stop", DIRECTORY_SERVICE).context("have the service directory stop")?;
+        let mut gone = false;
+        for _ in 0..400 {
+            if crate::services::running(DIRECTORY_PROGRAM).is_none() {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // If it would not go, init is asked for a restart instead: waiting for
+        // a process that never left would have this read the one already
+        // there as the new one, and the descriptions would never be read.
+        // 手起只在目录的服务是 `disabled` 时才成立（pudding 就是那样）。
+        // 有些机型这份服务不是 disabled，`ctl.start` 会被 init 拒
+        // 掉 —— 那时退回 `ctl.restart`，否则整个 bring_up 在这里就断了，
+        // 密钥程序一个都不会起，解密只会报 keymint 没在跑。
+        let by_hand = gone && skyward_sys::set_prop("ctl.start", DIRECTORY_SERVICE).is_ok();
+        if !by_hand {
+            if gone {
+                skyward_sys::kmsg("the directory is not started by hand here; init is asked to restart it")?;
+            }
+            skyward_sys::set_prop("ctl.restart", DIRECTORY_SERVICE).context("have the service directory start again")?;
+        }
+        return Ok(Some(Restarting { was, registered }));
     }
+    Ok(None)
+}
+
+/// Wait until the directory answers again, and have what had registered with
+/// it register again: those services register once, as it reads the
+/// descriptions once.
+pub fn await_descriptions(restarting: Option<Restarting>) -> Result<()> {
+    let Some(Restarting { was, registered }) = restarting else { return Ok(()) };
+    let starting = Instant::now();
+    answering_again(was)?;
+    skyward_sys::kmsg(&format!("the directory answers again after {:.2} s", starting.elapsed().as_secs_f64()))?;
+    let told = Instant::now();
+    register_again(&registered)?;
+    skyward_sys::kmsg(&format!("the {} services that had registered are answered again in {:.2} s", registered.len(), told.elapsed().as_secs_f64()))?;
     Ok(())
+}
+
+/// Write the descriptions and wait for the directory, as one.
+pub fn publish_descriptions(wanted: &[String]) -> Result<()> {
+    let restarting = write_descriptions(wanted)?;
+    await_descriptions(restarting)
 }
 
 /// What has registered with the service directory, each with the init

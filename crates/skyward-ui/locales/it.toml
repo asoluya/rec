@@ -562,6 +562,7 @@ merge = "Scorri per unire"
 fix = "Scorri per correggere"
 switch_and_reboot = "Scorri per cambiare e riavviare"
 remove = "Scorri per rimuovere"
+turn_on = "Scorri per attivare"
 
 [page]
 home = "Home"

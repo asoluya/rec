@@ -562,6 +562,7 @@ merge = "Desliza para fusionar"
 fix = "Desliza para corregir"
 switch_and_reboot = "Desliza para cambiar y reiniciar"
 remove = "Desliza para quitar"
+turn_on = "Desliza para activar"
 
 [page]
 home = "Inicio"

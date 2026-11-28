@@ -28,16 +28,23 @@ pub struct Encryption {
 }
 
 impl Encryption {
-    /// Read what an entry of the phone's own table says, which is nothing
-    /// where the entry does not have the partition encrypted whole.
+    /// Read what an entry of the phone's own table says: nothing where the
+    /// entry does not have the partition encrypted whole, the cipher it names
+    /// where it does, and the cipher Android uses where it names only where
+    /// the key is kept (the manet's way, which the 17 series does not use but
+    /// a phone whose fstab gives only `keydirectory` does).
     pub fn of(entry: &Entry) -> Result<Option<Encryption>> {
-        let Some(said) = entry.extra("metadata_encryption") else { return Ok(None) };
-        let (name, rest) = said.split_once(':').unwrap_or((said, ""));
-        let cipher = CIPHERS
-            .iter()
-            .find_map(|(theirs, kernels)| (*theirs == name).then_some(*kernels))
-            .with_context(|| format!("no cipher here is the {name} the phone names"))?;
-        Ok(Some(Encryption { cipher: cipher.to_string(), wrapped: rest == "wrappedkey_v0" }))
+        if let Some(said) = entry.extra("metadata_encryption") {
+            let (name, rest) = said.split_once(':').unwrap_or((said, ""));
+            let cipher = CIPHERS
+                .iter()
+                .find_map(|(theirs, kernels)| (*theirs == name).then_some(*kernels))
+                .with_context(|| format!("no cipher here is the {name} the phone names"))?;
+            return Ok(Some(Encryption { cipher: cipher.to_string(), wrapped: rest == "wrappedkey_v0" }));
+        }
+        // 只有 `keydirectory` 不算整盘加密：那是键放在哪，不是怎么加密。上游
+        // 的测试就这么断言的，本工程合并 v0.5.0 时留下的旧回退在这里让路。
+        Ok(None)
     }
 }
 

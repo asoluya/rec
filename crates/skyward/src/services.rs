@@ -23,8 +23,10 @@ use std::time::{Duration, Instant};
 /// before it is started again.
 const RESTART_DELAY: Duration = Duration::from_secs(1);
 
-/// How long a program gets to become what it says it will be.
-const READY_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a program gets to become what it says it will be. A program
+/// that never becomes it is passed over while the page waits, so it is
+/// given less time than a page it holds up can afford.
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_POLL: Duration = Duration::from_millis(100);
 
 /// Where the kernel says the highest capability it knows.
@@ -62,7 +64,47 @@ const LIBRARY_PATH: &str = "LD_LIBRARY_PATH";
 pub fn start(programs: &[Started], libraries: Option<&Path>) -> Result<()> {
     let known = accounts();
     for program in programs {
-        let (s, who, given) = readied(program, libraries, &known)?;
+        // A program of the phone's that this build may not have, or that
+        // does not become what it says it will be, holds up nothing where
+        // the configuration says it may be absent: the ones after it, which
+        // may be the ones that matter, still start (2026-11-25, from
+        // Kinaxie/skyward).
+        if program.service.optional && !Path::new(&program.service.path).is_file() {
+            skyward_sys::kmsg(&format!("{} is not here, so it is passed over", program.service.path))?;
+            continue;
+        }
+        let optional = program.service.optional;
+        let path = program.service.path.clone();
+        let name = Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+        // The phone's own init may have started this program already,
+        // perhaps from another path: a second copy cannot take the same
+        // sockets or driver and is started again every second for
+        // nothing. Keep that one where it has become what it says it
+        // will be. One that has not, as a key service started before
+        // the directory it registers with, is ended and started again
+        // now that it can.
+        if !program.service.oneshot && !program.anew
+            && let Some(pid) = running_named(&name).or_else(|| running(&path))
+        {
+            match ready(&program.service) {
+                Ok(()) => {
+                    skyward_sys::kmsg(&format!("{name} already runs as pid {pid}, so {path} is passed over"))?;
+                    continue;
+                }
+                Err(e) => {
+                    skyward_sys::kmsg(&format!("{path} (pid {pid}) is not ready, so it is started anew: {e:#}"))?;
+                    end_left(&program.service)?;
+                }
+            }
+        }
+        let (s, who, given) = match readied(program, libraries, &known) {
+            Ok(ready) => ready,
+            Err(e) if optional => {
+                skyward_sys::kmsg(&format!("{path} is passed over: {e:#}"))?;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if s.oneshot {
             let status = to_its_end(&s, &who, &given)?;
             ensure!(status.success(), "{} {} ended: {status}", s.path, s.args.join(" "));
@@ -70,7 +112,9 @@ pub fn start(programs: &[Started], libraries: Option<&Path>) -> Result<()> {
             continue;
         }
         if program.anew {
+            let left = Instant::now();
             end_left(&s)?;
+            skyward_sys::kmsg(&format!("{}: the one an earlier start left ended in {:.2} s", s.path, left.elapsed().as_secs_f64()))?;
         }
         // A property the program an earlier run of the recovery service
         // started has set says nothing of the one started now, which the
@@ -83,7 +127,17 @@ pub fn start(programs: &[Started], libraries: Option<&Path>) -> Result<()> {
         let waiting = s.clone();
         let name = Path::new(&s.path).file_name().map_or_else(|| s.path.clone(), |n| n.to_string_lossy().into_owned());
         thread::Builder::new().name(name).spawn(move || supervise(&s, &who, &given)).context("start a supervising thread")?;
-        ready(&waiting)?;
+        let waited = Instant::now();
+        match ready(&waiting) {
+            Ok(()) => {}
+            // A program that does not become what it says it will be holds
+            // up nothing where the configuration says it may be absent.
+            Err(e) if optional => skyward_sys::kmsg(&format!("{} is not ready, so it is passed over: {e:#}", waiting.path))?,
+            Err(e) => return Err(e),
+        }
+        // How long this program took to say it was up, which is what the
+        // bring-up waits on, one program after another.
+        skyward_sys::kmsg(&format!("{} was ready in {:.2} s", waiting.path, waited.elapsed().as_secs_f64()))?;
     }
     Ok(())
 }
@@ -176,7 +230,7 @@ pub fn place(library: &Path, folder: &Path) -> Result<PathBuf> {
 /// Start the program, wait until it ends and give how it ended.
 fn to_its_end(s: &Service, who: &Credentials, given: &Given) -> Result<ExitStatus> {
     let handed = given.make()?;
-    command(s, who, given, &handed).status().with_context(|| format!("run {}", s.path))
+    command(s, who, given, &handed, false).status().with_context(|| format!("run {}", s.path))
 }
 
 /// What init hands a program as it starts it besides what its line gives
@@ -268,7 +322,8 @@ fn make_socket(socket: &Socket, uid: libc::uid_t, gid: libc::gid_t) -> Result<Ow
 /// and wait until the service it was ready with is gone from the service
 /// directory, so that waiting for the one started next waits for that one.
 fn end_left(s: &Service) -> Result<()> {
-    let Some(pid) = running(&s.path) else { return Ok(()) };
+    let name = Path::new(&s.path).file_name().map_or_else(|| s.path.clone(), |n| n.to_string_lossy().into_owned());
+    let Some(pid) = running_named(&name).or_else(|| running(&s.path)) else { return Ok(()) };
     if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } != 0 {
         let e = io::Error::last_os_error();
         // It ended between being found and being told to.
@@ -411,7 +466,13 @@ fn ready(s: &Service) -> Result<()> {
     }
 }
 
+/// How many times a program that ends at once is started again before it
+/// is left alone: one that cannot run would otherwise be started every
+/// second for as long as the recovery is up.
+const RESTARTS: u32 = 5;
+
 fn supervise(s: &Service, who: &Credentials, given: &Given) -> ! {
+    let mut quick = 0;
     loop {
         let started = Instant::now();
         let ended = match running(&s.path) {
@@ -424,7 +485,16 @@ fn supervise(s: &Service, who: &Credentials, given: &Given) -> ! {
         };
         let _ = skyward_sys::kmsg(&line);
         if started.elapsed() < RESTART_DELAY {
+            quick += 1;
+            if quick >= RESTARTS {
+                let _ = skyward_sys::kmsg(&format!("{} ended {quick} times at once, so it is left alone", s.path));
+                loop {
+                    thread::sleep(Duration::from_secs(3600));
+                }
+            }
             thread::sleep(RESTART_DELAY);
+        } else {
+            quick = 0;
         }
     }
 }
@@ -432,12 +502,29 @@ fn supervise(s: &Service, who: &Credentials, given: &Given) -> ! {
 /// Start the program and wait for it to end.
 fn run(s: &Service, who: &Credentials, given: &Given) -> Result<String> {
     let handed = given.make()?;
-    let mut child = command(s, who, given, &handed).spawn().with_context(|| format!("start {}", s.path))?;
+    let mut child = command(s, who, given, &handed, true).spawn().with_context(|| format!("start {}", s.path))?;
+    let said = child.stderr.take().map(|err| {
+        thread::spawn(move || {
+            let mut kept: Vec<String> = Vec::new();
+            for line in io::BufRead::lines(io::BufReader::new(err)).map_while(std::result::Result::ok) {
+                kept.push(line);
+                if kept.len() > 6 {
+                    kept.remove(0);
+                }
+            }
+            kept
+        })
+    });
     // The program has its sockets now, and as init does, the recovery
     // keeps none of them open itself.
     drop(handed);
     let status = child.wait().context("wait for it")?;
-    Ok(format!("pid {} ended: {status}", child.id()))
+    let pid = child.id();
+    // What the program said as it ended is the only account of why it did:
+    // its last few lines go to the kernel log with how it ended.
+    let said = said.and_then(|t| t.join().ok()).unwrap_or_default();
+    let tail = if said.is_empty() { String::new() } else { format!(": {}", said.join(" | ")) };
+    Ok(format!("pid {pid} ended: {status}{tail}"))
 }
 
 /// The program as it is started: with what it is given, from the top of the
@@ -446,9 +533,9 @@ fn run(s: &Service, who: &Credentials, given: &Given) -> Result<String> {
 /// variable that names it, finding its libraries where it names them, and
 /// as `who`. Where init sets it folders of libraries of its own, they are
 /// searched after those it is given here.
-fn command(s: &Service, who: &Credentials, given: &Given, handed: &[(String, OwnedFd)]) -> Command {
+fn command(s: &Service, who: &Credentials, given: &Given, handed: &[(String, OwnedFd)], capture: bool) -> Command {
     let mut cmd = Command::new(&s.path);
-    cmd.args(&s.args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(&s.args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(if capture { Stdio::piped() } else { Stdio::null() });
     let mut libraries = s.libraries.clone();
     for (name, value) in &given.environment {
         match name == LIBRARY_PATH {
@@ -573,6 +660,17 @@ pub fn running(path: &str) -> Option<u32> {
     fs::read_dir("/proc").ok()?.flatten().find_map(|e| {
         let pid: u32 = e.file_name().to_str()?.parse().ok()?;
         (fs::read_link(e.path().join("exe")).ok()? == Path::new(path)).then_some(pid)
+    })
+}
+
+/// A process already running a program of this file name, from whichever
+/// path it was started: the phone's init may name the same program as the
+/// recovery does, or link to it from another partition.
+fn running_named(name: &str) -> Option<u32> {
+    fs::read_dir("/proc").ok()?.flatten().find_map(|e| {
+        let pid: u32 = e.file_name().to_str()?.parse().ok()?;
+        let exe = fs::read_link(e.path().join("exe")).ok()?;
+        (exe.file_name().is_some_and(|n| n.to_string_lossy() == name)).then_some(pid)
     })
 }
 

@@ -552,6 +552,7 @@ merge = "スライドしてマージ"
 fix = "スライドして修復"
 switch_and_reboot = "スライドして切り替えと再起動"
 remove = "スライドして削除"
+turn_on = "スライドでオンにする"
 
 [page]
 home = "ホーム"

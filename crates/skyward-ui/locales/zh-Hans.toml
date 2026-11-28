@@ -552,6 +552,7 @@ merge = "滑动以合并"
 fix = "滑动以修复"
 switch_and_reboot = "滑动以切换并重启"
 remove = "滑动以删除"
+turn_on = "滑动以开启"
 
 [page]
 home = "主页"
